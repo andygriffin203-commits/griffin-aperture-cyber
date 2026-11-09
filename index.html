@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberPrint | Customer</title>
+<style>
+:root{--blue:#1457d9;--ink:#172033;--muted:#64748b;--line:#dbe3ef;--bg:#f3f6fb}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Arial,sans-serif;color:var(--ink)}
+header{background:#102b59;color:white;padding:22px 16px;text-align:center}header h1{margin:0 0 6px;font-size:25px}header p{margin:0;color:#dbeafe}
+main{max-width:720px;margin:24px auto;padding:0 14px}.card{background:white;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 4px 18px #0f172a0a}
+h2{font-size:19px;margin:0 0 14px}label{display:block;font-weight:700;margin:13px 0 6px}
+input,textarea,select{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:white}
+textarea{min-height:76px;resize:vertical}button{border:0;background:var(--blue);color:white;padding:12px 16px;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;margin-top:14px}
+button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:#e8eef8;color:#17345f}.hidden{display:none!important}
+.note{color:var(--muted);font-size:13px;line-height:1.5}.status{padding:11px;border-radius:8px;margin-top:12px;background:#eef4ff;color:#17345f;white-space:pre-wrap}
+.filebox{border:1px solid var(--line);padding:14px;border-radius:10px;margin:12px 0}.filebox h3{font-size:15px;margin:0 0 8px}.row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:18px}
+</style>
+</head>
+<body>
+<header><h1>CyberPrint</h1><p>Fast, simple document printing</p></header>
+<main>
+<section class="card" id="requestCard">
+<h2>1. Request access</h2>
+<p class="note">Enter your details. The administrator will give you a one-time password (OTP).</p>
+<label for="customerName">Full name</label><input id="customerName" autocomplete="name" maxlength="100" placeholder="Your full name">
+<label for="phone">Phone number</label><input id="phone" autocomplete="tel" inputmode="tel" placeholder="e.g. 0712345678">
+<button id="requestBtn" type="button">Request OTP</button>
+<div id="requestStatus" class="status hidden" role="status"></div>
+</section>
+
+<section class="card hidden" id="verifyCard">
+<h2>2. Verify OTP</h2>
+<p class="note">Enter the six-digit OTP provided by the administrator. It expires after five minutes.</p>
+<label for="otp">Six-digit OTP</label><input id="otp" inputmode="numeric" maxlength="6" placeholder="123456">
+<button id="verifyBtn" type="button">Verify and continue</button>
+<div id="verifyStatus" class="status hidden" role="status"></div>
+</section>
+
+<section class="card hidden" id="uploadCard">
+<h2>3. Upload documents</h2>
+<p class="note">You can add several files. Maximum 20 MB per file. Accepted formats include PDF, Word, Excel, PowerPoint, JPG, PNG, WEBP and TXT.</p>
+<label for="files">Choose document(s)</label><input id="files" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.webp,.txt">
+<div id="fileOptions"></div>
+<label for="generalInstructions">Instructions for the whole order</label>
+<textarea id="generalInstructions" maxlength="2000" placeholder="Any instructions that apply to all documents"></textarea>
+<button id="uploadBtn" type="button">Upload all documents</button>
+<div id="uploadStatus" class="status hidden" role="status"></div>
+</section>
+</main>
+<footer>CyberPrint · Please keep this page open while uploading.</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+(() => {
+  const SUPABASE_URL = "https://vtdootvjxolxqangjvbb.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_caSbKXLaZ8QK-5tvCdMMLA_tsS88imm";
+  const FUNCTION_URL = SUPABASE_URL + "/functions/v1/cyberprint-otp";
+  const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  let requestId = null;
+  let uploadToken = null;
+  let selectedFiles = [];
+
+  const $ = id => document.getElementById(id);
+  function show(id, message, isError=false) {
+    const el = $(id); el.textContent = message; el.classList.remove("hidden");
+    el.style.background = isError ? "#fff1f2" : "#eef4ff";
+    el.style.color = isError ? "#9f1239" : "#17345f";
+  }
+  async function postJson(body) {
+    const {data, error} = await db.functions.invoke("cyberprint-otp", {body});
+    if (error) throw new Error(error.message || "Could not contact the server");
+    if (data && data.error) throw new Error(data.error);
+    return data;
+  }
+
+  $("requestBtn").addEventListener("click", async () => {
+    const name = $("customerName").value.trim();
+    let phone = $("phone").value.trim().replace(/[\\s()-]/g, "");
+    if (/^0[0-9]{9}$/.test(phone)) phone = "+254" + phone.slice(1);
+    if (!name || !phone) return show("requestStatus", "Enter your name and phone number.", true);
+    $("requestBtn").disabled = true;
+    try {
+      const result = await postJson({action:"request", name, phone});
+      requestId = result.request_id;
+      show("requestStatus", "Your OTP request has been sent. Please ask the administrator for your OTP.");
+      $("verifyCard").classList.remove("hidden");
+      $("verifyCard").scrollIntoView({behavior:"smooth"});
+    } catch(e) { show("requestStatus", e.message, true); }
+    finally { $("requestBtn").disabled = false; }
+  });
+
+  $("verifyBtn").addEventListener("click", async () => {
+    const otp = $("otp").value.trim();
+    if (!requestId) return show("verifyStatus", "Please request an OTP first.", true);
+    $("verifyBtn").disabled = true;
+    try {
+      const result = await postJson({action:"verify", request_id:requestId, otp});
+      uploadToken = result.upload_token;
+      show("verifyStatus", "OTP verified. You can now upload your documents.");
+      $("uploadCard").classList.remove("hidden");
+      $("uploadCard").scrollIntoView({behavior:"smooth"});
+    } catch(e) { show("verifyStatus", e.message, true); }
+    finally { $("verifyBtn").disabled = false; }
+  });
+
+  $("files").addEventListener("change", () => {
+    selectedFiles = Array.from($("files").files || []);
+    const holder = $("fileOptions"); holder.innerHTML = "";
+    selectedFiles.forEach((file, i) => {
+      const box = document.createElement("div"); box.className = "filebox";
+      const title = document.createElement("h3"); title.textContent = file.name + " (" + (file.size/1024/1024).toFixed(2) + " MB)";
+      box.appendChild(title);
+      const makeLabel = (txt, node) => { const l=document.createElement("label"); l.textContent=txt; box.appendChild(l); box.appendChild(node); };
+      const instructions=document.createElement("textarea"); instructions.maxLength=2000; instructions.placeholder="Instructions for this file (optional)";
+      instructions.id="fileinst"+i; makeLabel("File instructions", instructions);
+      const row=document.createElement("div"); row.className="row";
+      const colour=document.createElement("select"); colour.id="colour"+i;
+      [["Black & white","bw"],["Colour","colour"]].forEach(([t,v])=>{const o=document.createElement("option");o.textContent=t;o.value=v;colour.appendChild(o)});
+      const sides=document.createElement("select"); sides.id="sides"+i;
+      [["Single-sided","single"],["Double-sided","double"]].forEach(([t,v])=>{const o=document.createElement("option");o.textContent=t;o.value=v;sides.appendChild(o)});
+      const copies=document.createElement("input"); copies.id="copies"+i; copies.type="number"; copies.min="1"; copies.max="1000"; copies.value="1";
+      const a=document.createElement("div"),b=document.createElement("div"),c=document.createElement("div");
+      const la=document.createElement("label");la.textContent="Print colour";a.append(la,colour);
+      const lb=document.createElement("label");lb.textContent="Sides";b.append(lb,sides);
+      const lc=document.createElement("label");lc.textContent="Copies";c.append(lc,copies);
+      row.append(a,b,c); box.appendChild(row);
+      holder.appendChild(box);
+    });
+  });
+
+  $("uploadBtn").addEventListener("click", async () => {
+    if (!uploadToken) return show("uploadStatus", "Verify your OTP first.", true);
+    if (!selectedFiles.length) return show("uploadStatus", "Choose at least one document.", true);
+    if (selectedFiles.some(f => f.size > 20*1024*1024)) return show("uploadStatus", "One or more files exceed 20 MB.", true);
+    $("uploadBtn").disabled = true;
+    let completed = 0;
+    try {
+      for (let i=0; i<selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        const form = new FormData();
+        form.append("upload_token", uploadToken);
+        form.append("file", file, file.name);
+        form.append("file_instructions", $("fileinst"+i)?.value || "");
+        form.append("general_instructions", $("generalInstructions").value);
+        form.append("print_options", JSON.stringify({
+          colour: $("colour"+i).value,
+          sides: $("sides"+i).value,
+          copies: Math.max(1, Math.min(1000, Number($("copies"+i).value)||1))
+        }));
+        const response = await fetch(FUNCTION_URL, {
+          method:"POST",
+          headers:{"apikey":SUPABASE_KEY},
+          body:form
+        });
+        const result = await response.json().catch(()=>({error:"Invalid server response"}));
+        if (!response.ok || !result.success) throw new Error(result.error || "Upload failed for " + file.name);
+        completed++;
+        show("uploadStatus", "Uploaded " + completed + " of " + selectedFiles.length + " documents...");
+      }
+      show("uploadStatus", "All " + completed + " document(s) uploaded successfully. Thank you!");
+      $("files").value = ""; $("fileOptions").innerHTML = ""; selectedFiles = [];
+    } catch(e) {
+      show("uploadStatus", completed + " of " + selectedFiles.length + " uploaded. " + e.message, true);
+    } finally { $("uploadBtn").disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>
